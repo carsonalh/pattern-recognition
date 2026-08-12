@@ -86,12 +86,10 @@ if __name__ == "__main__":
     device_kind = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device kind:", device_kind)
     device = torch.device(device_kind)
-    PRESENT = False
-    if PRESENT:
-        gaussian_plot()
-        sinusoid_plot()
-        gabor_plot()
-        mandelbrot_plot(zoom=False)
-        mandelbrot_plot(zoom=True)
-    else:
-        sierpinski_plot()
+
+    gaussian_plot()
+    sinusoid_plot()
+    gabor_plot()
+    mandelbrot_plot(zoom=False)
+    mandelbrot_plot(zoom=True)
+    sierpinski_plot()
