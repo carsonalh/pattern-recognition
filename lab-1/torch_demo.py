@@ -60,24 +60,40 @@ def mandelbrot_plot(*, zoom):
 
 
 def sierpinski_plot():
-    scale = torch.Tensor([[0.5, 0.0], [0.0, 0.5]]).to(device)
-    vertices = torch.Tensor([[[-0.5], [0]], [[0.5], [0]], [[0], [1]]]).to(device)
-    offsets = [torch.Tensor([[0.0], [0.5]]).to(device), torch.Tensor([[-0.25], [0.0]]).to(device), torch.Tensor([[0.25], [0.0]]).to(device)]
+    scale = torch.Tensor([[1/3, 0.0], [0.0, 1/3]]).to(device)
+    vertices = torch.Tensor([[[-0.5], [0]], [[-0.5], [1]], [[0.5], [1]], [[0.5], [0]]]).to(device)
+    offsets = [
+        torch.Tensor([[-1/3], [0.0]]).to(device),
+        torch.Tensor([[-1/3], [1/3]]).to(device),
+        torch.Tensor([[-1/3], [2/3]]).to(device),
+        torch.Tensor([[0.0], [0.0]]).to(device),
+        torch.Tensor([[0.0], [2/3]]).to(device),
+        torch.Tensor([[1/3], [0.0]]).to(device),
+        torch.Tensor([[1/3], [1/3]]).to(device),
+        torch.Tensor([[1/3], [2/3]]).to(device),
+        ]
 
-    for _ in range(8):
-        vertices = 0.5 * vertices
+    for _ in range(4):
+        vertices = vertices / 3
         # Same as matrix mul (below), but above is more efficient
         # vertices = scale @ vertices
-        vertices = torch.concatenate((vertices + offsets[0], vertices + offsets[1], vertices + offsets[2]), axis=0)
-    assert len(vertices) % 3 == 0
+        vertices = torch.concatenate((vertices + offsets[0],
+             vertices + offsets[1],
+             vertices + offsets[2],
+             vertices + offsets[3],
+             vertices + offsets[4],
+             vertices + offsets[5],
+             vertices + offsets[6],
+             vertices + offsets[7]), axis=0)
+    assert len(vertices) % 4 == 0
 
     # Serial code only for drawing to MPL
     vertices = vertices.cpu()
     plt.xlim([-0.5, 0.5])
-    for i in range(len(vertices) // 3):
-        sli = vertices[3*i:3*(i + 1)]
-        tri = plt.Polygon(sli.reshape((3, 2)), color='black')
-        plt.gca().add_patch(tri)
+    for i in range(len(vertices) // 4):
+        sli = vertices[4*i:4*(i + 1)]
+        quad = plt.Polygon(sli.reshape((4, 2)), color='black')
+        plt.gca().add_patch(quad)
     plt.show()
 
 
