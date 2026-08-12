@@ -38,27 +38,6 @@ def gabor_plot():
     plt.show()
 
 
-def sierpinski_plot():
-    scale = np.array([[0.5, 0.0], [0.0, 0.5]])
-    vertices = np.array([[[-0.5], [0]], [[0.5], [0]], [[0], [1]]])
-    offsets = [np.array([[0.0], [0.5]]), np.array([[-0.25], [0.0]]), np.array([[0.25], [0.0]])]
-
-    for _ in range(8):
-        vertices = scale @ vertices
-        vertices = np.concatenate((vertices + offsets[0], vertices + offsets[1], vertices + offsets[2]), axis=0)
-
-    assert len(vertices) % 3 == 0
-
-    plt.xlim([-0.5, 0.5])
-
-    for i in range(len(vertices) // 3):
-        sli = vertices[3*i:3*(i + 1)]
-        tri = plt.Polygon(sli.reshape((3, 2)), color='black')
-        plt.gca().add_patch(tri)
-
-    plt.show()
-
-
 def mandelbrot_plot(*, zoom):
     if zoom:
         width, steps = 1e-2, 5000
@@ -77,6 +56,28 @@ def mandelbrot_plot(*, zoom):
 
     plt.imshow(torch.abs(z).cpu().T)
     plt.tight_layout()
+    plt.show()
+
+
+def sierpinski_plot():
+    scale = torch.Tensor([[0.5, 0.0], [0.0, 0.5]]).to(device)
+    vertices = torch.Tensor([[[-0.5], [0]], [[0.5], [0]], [[0], [1]]]).to(device)
+    offsets = [torch.Tensor([[0.0], [0.5]]).to(device), torch.Tensor([[-0.25], [0.0]]).to(device), torch.Tensor([[0.25], [0.0]]).to(device)]
+
+    for _ in range(8):
+        vertices = 0.5 * vertices
+        # Same as matrix mul (below), but above is more efficient
+        # vertices = scale @ vertices
+        vertices = torch.concatenate((vertices + offsets[0], vertices + offsets[1], vertices + offsets[2]), axis=0)
+    assert len(vertices) % 3 == 0
+
+    # Serial code only for drawing to MPL
+    vertices = vertices.cpu()
+    plt.xlim([-0.5, 0.5])
+    for i in range(len(vertices) // 3):
+        sli = vertices[3*i:3*(i + 1)]
+        tri = plt.Polygon(sli.reshape((3, 2)), color='black')
+        plt.gca().add_patch(tri)
     plt.show()
 
 
