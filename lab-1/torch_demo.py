@@ -38,10 +38,29 @@ def gabor_plot():
     plt.show()
 
 
-def mandelbrot_plot():
-    ZOOM = 1
+def sierpinski_plot():
+    scale = np.array([[0.5, 0.0], [0.0, 0.5]])
+    vertices = np.array([[[-0.5], [0]], [[0.5], [0]], [[0], [1]]])
+    offsets = [np.array([[0.0], [0.5]]), np.array([[-0.25], [0.0]]), np.array([[0.25], [0.0]])]
 
-    if ZOOM:
+    for _ in range(8):
+        vertices = scale @ vertices
+        vertices = np.concatenate((vertices + offsets[0], vertices + offsets[1], vertices + offsets[2]), axis=0)
+
+    assert len(vertices) % 3 == 0
+
+    plt.xlim([-0.5, 0.5])
+
+    for i in range(len(vertices) // 3):
+        sli = vertices[3*i:3*(i + 1)]
+        tri = plt.Polygon(sli.reshape((3, 2)), color='black')
+        plt.gca().add_patch(tri)
+
+    plt.show()
+
+
+def mandelbrot_plot(*, zoom):
+    if zoom:
         width, steps = 1e-2, 5000
         re_begin, im_begin = -0.6549505794779913 + 5 *1e-3, 0.41727211410726495
         re_range, im_range = np.arange(re_begin, re_begin + width, width / steps), np.arange(im_begin, im_begin + width, width / steps)
@@ -71,5 +90,7 @@ if __name__ == "__main__":
         gaussian_plot()
         sinusoid_plot()
         gabor_plot()
+        mandelbrot_plot(zoom=False)
+        mandelbrot_plot(zoom=True)
     else:
-        mandelbrot_plot()
+        sierpinski_plot()
