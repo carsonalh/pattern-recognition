@@ -7,7 +7,11 @@ authors = [
     { name = "Carson Holloway", email = "carson@carsonholloway.com.au" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.2",
+    "pyqt6>=6.11.0",
+]
 
 [project.scripts]
 lab-2 = "lab_2:main"
