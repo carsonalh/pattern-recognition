@@ -11,8 +11,8 @@ set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
 
-if (( $# > 0 )); then
+if (( $# > 0 )) && [[ "$1" != -* ]]; then
     exec "$@"
 fi
 
-exec .venv/bin/python resnet18.py
+exec .venv/bin/python resnet18.py "$@"

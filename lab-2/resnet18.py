@@ -1,5 +1,8 @@
 """Train a ResNet-18 classifier on CIFAR-10."""
 
+import argparse
+import time
+
 import torch
 from torch import nn, Tensor
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
@@ -8,6 +11,13 @@ from torchvision import datasets, transforms
 
 DATA_DIR = "data"
 NUM_CLASSES = 10
+START_TIME = time.monotonic()
+
+
+def log(message):
+    """Print a message with the elapsed time since this process started."""
+    elapsed = time.monotonic() - START_TIME
+    print(f"[{elapsed:10.2f}s] {message}", flush=True)
 
 
 class TransformedDataset(Dataset):
@@ -205,9 +215,14 @@ def evaluate(model, loader, loss_fn, device):
     return total_loss / total, correct / total
 
 
-def main(epochs=20, batch_size=128, learning_rate=0.1):
+def main(epochs=50, batch_size=256, learning_rate=0.2):
+    log(
+        "Arguments: "
+        f"epochs={epochs}, batch_size={batch_size}, "
+        f"learning_rate={learning_rate}"
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    log(f"Using device: {device}")
 
     train_loader, validation_loader, _test_loader = build_dataloaders(
         batch_size=batch_size
@@ -228,7 +243,7 @@ def main(epochs=20, batch_size=128, learning_rate=0.1):
             model, validation_loader, loss_fn, device
         )
         scheduler.step()
-        print(
+        log(
             f"Epoch {epoch + 1:02d}/{epochs} | "
             f"train loss: {train_loss:.4f}, train acc: {train_accuracy:.4f} | "
             f"validation loss: {validation_loss:.4f}, "
@@ -237,4 +252,13 @@ def main(epochs=20, batch_size=128, learning_rate=0.1):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--learning-rate", type=float, default=0.2)
+    args = parser.parse_args()
+    main(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+    )
