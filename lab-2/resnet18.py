@@ -7,7 +7,7 @@ import time
 
 import torch
 from torch import nn, Tensor
-from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, models, transforms
 
 
@@ -42,7 +42,7 @@ def build_dataloaders(
     batch_size=128,
     num_workers=DEFAULT_NUM_WORKERS,
 ):
-    """Download CIFAR-10 and return training, validation, and test loaders."""
+    """Download CIFAR-10 and return the official train and test loaders."""
     mean = (0.4914, 0.4822, 0.4465)
     std = (0.2023, 0.1994, 0.2010)
 
@@ -63,18 +63,8 @@ def build_dataloaders(
     test_data = datasets.CIFAR10(
         root=data_dir, train=False, download=True, transform=None
     )
-    all_data = ConcatDataset([train_data, test_data])
-    train_size = int(0.8 * len(all_data))
-    validation_size = int(0.15 * len(all_data))
-    test_size = len(all_data) - train_size - validation_size
-    train_subset, validation_subset, test_subset = random_split(
-        all_data,
-        [train_size, validation_size, test_size],
-        generator=torch.Generator().manual_seed(42),
-    )
-    train_dataset = TransformedDataset(train_subset, train_transform)
-    validation_dataset = TransformedDataset(validation_subset, validation_transform)
-    test_dataset = TransformedDataset(test_subset, validation_transform)
+    train_dataset = TransformedDataset(train_data, train_transform)
+    validation_dataset = TransformedDataset(test_data, validation_transform)
 
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
@@ -86,12 +76,7 @@ def build_dataloaders(
         num_workers=num_workers, pin_memory=True,
         persistent_workers=num_workers > 0,
     )
-    test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
-        persistent_workers=num_workers > 0,
-    )
-    return train_loader, validation_loader, test_loader
+    return train_loader, validation_loader
 
 
 class ResNetBlock(nn.Module):
@@ -186,8 +171,9 @@ class ResNet18(nn.Module):
 def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
     model.train()
     amp_enabled = device.type == "cuda"
-    total_loss = 0.0
     correct = 0
+    correct = torch.zeros((), device=device)
+    total_loss = torch.zeros((), device=device)
     total = 0
     for images, labels in loader:
         images = images.to(device, non_blocking=True)
@@ -201,8 +187,8 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        total_loss += loss.item() * labels.size(0)
-        correct += (predictions.argmax(dim=1) == labels).sum().item()
+        total_loss += loss * labels.size(0)
+        correct += (predictions.argmax(dim=1) == labels).sum()
         total += labels.size(0)
     return total_loss / total, correct / total
 
@@ -247,7 +233,7 @@ def main(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"Using device: {device}")
 
-    train_loader, validation_loader, _test_loader = build_dataloaders(
+    train_loader, validation_loader = build_dataloaders(
         batch_size=batch_size, num_workers=num_workers
     )
     if builtin_resnet18:
