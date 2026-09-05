@@ -11,10 +11,15 @@ partition=comp3710
 qos=
 time_limit=00:30:00
 batch_sizes=(32 64 128 256 512 1024)
-learning_rates=(0.01 0.05 0.1 0.5 1.0)
+learning_rates=(0.001 0.005)
+local_mode=0
 
 while (($# > 0)); do
     case "$1" in
+        --local)
+            local_mode=1
+            shift 1
+            ;;
         --epochs)
             epochs=$2
             shift 2
@@ -50,6 +55,10 @@ while (($# > 0)); do
     esac
 done
 
+if (( local_mode )); then
+    parallel_jobs=1
+fi
+
 command -v parallel >/dev/null || {
     printf 'GNU Parallel is required but was not found\n' >&2
     exit 1
@@ -63,7 +72,16 @@ if [[ -n "$time_limit" ]]; then
     sbatch_options+=(--time="$time_limit")
 fi
 
-parallel --halt soon,fail=1 --line-buffer --jobs "$parallel_jobs" \
-    sbatch --wait "${sbatch_options[@]}" batch-resnet18.sh \
-    --epochs "$epochs" --batch-size {1} --learning-rate {2} \
-    ::: "${batch_sizes[@]}" ::: "${learning_rates[@]}"
+if (( local_mode )); then
+    parallel --halt soon,fail=1 --line-buffer --jobs "$parallel_jobs" \
+        'uv run ./resnet18.py --epochs '"$epochs"' --batch-size {1} --learning-rate {2} > "resnet18_b{1}_lr{2}.out" 2> "resnet18_b{1}_lr{2}.err"' \
+        ::: "${batch_sizes[@]}" ::: "${learning_rates[@]}"
+else
+    parallel --halt soon,fail=1 --line-buffer --jobs "$parallel_jobs" \
+        sbatch --wait "${sbatch_options[@]}" \
+        --output=resnet18_b{1}_lr{2}.out \
+        --error=resnet18_b{1}_lr{2}.err \
+        batch-resnet18.sh \
+        --epochs "$epochs" --batch-size {1} --learning-rate {2} \
+        ::: "${batch_sizes[@]}" ::: "${learning_rates[@]}"
+fi
