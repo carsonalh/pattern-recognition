@@ -7,9 +7,7 @@
 #SBATCH --output=resnet18-%j.out
 #SBATCH --error=resnet18-%j.err
 
-set -euo pipefail
-
-cd "${SLURM_SUBMIT_DIR}"
+set -eu
 
 if (( $# > 0 )) && [[ "$1" != -* ]]; then
     exec "$@"
