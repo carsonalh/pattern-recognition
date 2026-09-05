@@ -6,7 +6,7 @@ import time
 import torch
 from torch import nn, Tensor
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
-from torchvision import datasets, transforms
+from torchvision import datasets, models, transforms
 
 
 DATA_DIR = "data"
@@ -140,7 +140,7 @@ class ResNet18(nn.Module):
         super().__init__()
         # We're working with 32 x 32 images for CIFAR10
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, padding=3),
+            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, padding=3, stride=2),
             nn.BatchNorm2d(64),
             nn.ReLU(),
         )
@@ -215,11 +215,12 @@ def evaluate(model, loader, loss_fn, device):
     return total_loss / total, correct / total
 
 
-def main(epochs=50, batch_size=256, learning_rate=0.2):
+def main(epochs=50, batch_size=256, learning_rate=0.2, builtin_resnet18=False):
     log(
         "Arguments: "
         f"epochs={epochs}, batch_size={batch_size}, "
-        f"learning_rate={learning_rate}"
+        f"learning_rate={learning_rate}, "
+        f"builtin_resnet18={builtin_resnet18}"
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"Using device: {device}")
@@ -227,7 +228,11 @@ def main(epochs=50, batch_size=256, learning_rate=0.2):
     train_loader, validation_loader, _test_loader = build_dataloaders(
         batch_size=batch_size
     )
-    model = ResNet18().to(device)
+    if builtin_resnet18:
+        model = models.resnet18(weights=None, num_classes=NUM_CLASSES)
+    else:
+        model = ResNet18()
+    model = model.to(device)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
@@ -256,9 +261,15 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=0.2)
+    parser.add_argument(
+        "--builtin-resnet18",
+        action="store_true",
+        help="use torchvision's built-in ResNet-18 instead of the custom model",
+    )
     args = parser.parse_args()
     main(
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        builtin_resnet18=args.builtin_resnet18,
     )
