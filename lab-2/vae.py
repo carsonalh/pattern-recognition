@@ -208,7 +208,7 @@ class VAE(nn.Module):
         return mean, torch.log(std ** 2), z, decoded
 
 
-def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device, kl_weight=1e-4):
+def train_one_epoch(model, loader, optimizer, scaler, device, kl_weight=1e-2):
     model.train()
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
@@ -237,7 +237,7 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device, kl_weight
 
 
 @torch.no_grad()
-def evaluate(model, loader, loss_fn, device, kl_weight=1e-4):
+def evaluate(model, loader, loss_fn, device, kl_weight=1e-2):
     model.eval()
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
@@ -351,7 +351,7 @@ def main(
     while epoch < epochs:
         try:
             train_loss = train_one_epoch(
-                model, train_loader, loss_fn, optimizer, scaler, device
+                model, train_loader, optimizer, scaler, device
             )
             validation_loss = evaluate(model, validation_loader, loss_fn, device)
             scheduler.step()
