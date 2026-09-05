@@ -3,6 +3,7 @@
 import argparse
 import math
 import os
+import signal
 import time
 import zipfile
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import torch
 from PIL import Image
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
@@ -103,6 +105,11 @@ def image_shape(data_source=DATA_SOURCE, split="keras_png_slices_train"):
                 return (1, image.height, image.width)
 
 
+def ignore_sigint(_worker_id):
+    """Keep data-loader workers alive so the main process can handle Ctrl-C."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
 def build_dataloaders(
     data_source=DATA_SOURCE,
     batch_size=64,
@@ -123,6 +130,7 @@ def build_dataloaders(
         "num_workers": num_workers,
         "pin_memory": True,
         "persistent_workers": num_workers > 0,
+        "worker_init_fn": ignore_sigint,
     }
     train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
     validation_loader = DataLoader(validation_dataset, shuffle=False, **loader_kwargs)
@@ -130,18 +138,77 @@ def build_dataloaders(
     return train_loader, validation_loader, test_loader
 
 
-class LinearVAEPlaceholder(nn.Module):
+def collect_examples(loader, count):
+    """Collect a small, CPU-resident set of images for interrupt-time plotting."""
+    examples = []
+    collected = 0
+    for images in loader:
+        examples.append(images.cpu())
+        collected += images.size(0)
+        if collected >= count:
+            break
+    return torch.cat(examples, dim=0)[:count]
+
+
+class VAE(nn.Module):
     """Temporary trainable placeholder; replace this with the actual VAE."""
 
-    def __init__(self, image_width):
+    def __init__(self, image_width, latent_dims=8):
         super().__init__()
-        self.linear = nn.Linear(image_width, image_width)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(-3),
+        )
+        self.fc_mean = nn.Linear(256, latent_dims)
+        self.fc_std = nn.Linear(256, latent_dims)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dims, 64),
+            nn.Unflatten(-1, (1, 8, 8)),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(1, 256, kernel_size=3, padding=1),
+            # nn.ConvTranspose2d(1, 256, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            # nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            # nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            # nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(32, 1, kernel_size=3, padding=1),
+            # nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1),
+        )
+
+    def sample_latent(self, mean, std):
+        epsilon = torch.randn_like(mean)
+        return mean + std * epsilon
 
     def forward(self, images):
-        return self.linear(images)
+        x = images
+        encoded = self.encoder(x)
+        mean, std = self.fc_mean(encoded), F.softplus(self.fc_std(encoded)) + 1e-6
+        z = self.sample_latent(mean, std)
+        decoded = self.decoder(z)
+        return mean, torch.log(std ** 2), z, decoded
 
 
-def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
+def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device, kl_weight=1e-4):
     model.train()
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
@@ -152,8 +219,15 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
         with torch.autocast(
             device_type=device.type, dtype=torch.float16, enabled=amp_enabled
         ):
-            reconstructions = model(images)
-            loss = loss_fn(reconstructions, images)
+            mean, logvar, _z, decoded = model(images)
+            decoded_loss = (
+                F.binary_cross_entropy_with_logits(decoded, images, reduction="none")
+                    .sum(dim=(-1, -2))
+                    .squeeze(dim=-1)
+                    .mean(dim=-1)
+            )
+            kl_loss = -0.5 * (1 + logvar - mean ** 2 - torch.exp(logvar)).sum(dim=-1).mean(dim=-1)
+            loss = decoded_loss + kl_weight * kl_loss
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -163,7 +237,7 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, loss_fn, device):
+def evaluate(model, loader, loss_fn, device, kl_weight=1e-4):
     model.eval()
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
@@ -173,17 +247,66 @@ def evaluate(model, loader, loss_fn, device):
         with torch.autocast(
             device_type=device.type, dtype=torch.float16, enabled=amp_enabled
         ):
-            reconstructions = model(images)
-            loss = loss_fn(reconstructions, images)
+            mean, logvar, _, decoded = model(images)
+            decoded_loss = (
+                F.binary_cross_entropy_with_logits(decoded, images, reduction="none")
+                    .sum(dim=(-1, -2))
+                    .squeeze(dim=-1)
+                    .mean(dim=-1)
+            )
+            kl_loss = -0.5 * (1 + logvar - mean ** 2 - torch.exp(logvar)).sum(dim=-1).mean(dim=-1)
+            loss = decoded_loss + kl_weight * kl_loss
         total_loss += loss.item() * images.size(0)
         total += images.size(0)
     return total_loss / total
 
 
+@torch.no_grad()
+def show_interrupt_visualization(
+    model, train_examples, validation_examples, latent_dims, device
+):
+    """Show reconstructions and prior samples after training is interrupted."""
+    import matplotlib.pyplot as plt
+
+    model.eval()
+    train_images = train_examples.to(device, non_blocking=True)
+    validation_images = validation_examples.to(device, non_blocking=True)
+
+    _, _, _, train_logits = model(train_images)
+    _, _, _, validation_logits = model(validation_images)
+    train_reconstructions = torch.sigmoid(train_logits).cpu()
+    validation_reconstructions = torch.sigmoid(validation_logits).cpu()
+
+    latent_samples = torch.randn(4, latent_dims, device=device)
+    base_model = getattr(model, "_orig_mod", model)
+    sampled_images = torch.sigmoid(base_model.decoder(latent_samples)).cpu()
+
+    images = []
+    titles = []
+    for index in range(4):
+        images.extend((train_examples[index], train_reconstructions[index]))
+        titles.extend((f"Train {index + 1} original", f"Train {index + 1} recon"))
+    for index in range(2):
+        images.extend((validation_examples[index], validation_reconstructions[index]))
+        titles.extend((f"Validation {index + 1} original", f"Validation {index + 1} recon"))
+    for index in range(4):
+        images.append(sampled_images[index])
+        titles.append(f"Prior sample {index + 1}")
+
+    figure, axes = plt.subplots(4, 4, figsize=(10, 10))
+    for axis, image, title in zip(axes.flat, images, titles):
+        axis.imshow(image.squeeze().clamp(0, 1), cmap="gray", vmin=0, vmax=1)
+        axis.set_title(title, fontsize=9)
+        axis.axis("off")
+    figure.suptitle("VAE examples at interruption", fontsize=14)
+    figure.subplots_adjust(wspace=0.04, hspace=0.28)
+    plt.show()
+
+
 def main(
     epochs=50,
     batch_size=64,
-    learning_rate=1e-3,
+    learning_rate=1e-2,
     num_workers=DEFAULT_NUM_WORKERS,
     compile_model=False,
 ):
@@ -201,9 +324,11 @@ def main(
     train_loader, validation_loader, _test_loader = build_dataloaders(
         data_source=DATA_SOURCE, batch_size=batch_size, num_workers=num_workers
     )
+    train_examples = collect_examples(train_loader, 4)
+    validation_examples = collect_examples(validation_loader, 2)
     _, _, image_width = image_shape(DATA_SOURCE)
-    breakpoint()
-    model = LinearVAEPlaceholder(image_width).to(device)
+    model = VAE(image_width).to(device)
+    latent_dims = model.fc_mean.out_features
     if compile_model:
         model = torch.compile(model)
 
@@ -222,18 +347,32 @@ def main(
         optimizer, lr_lambda=learning_rate_schedule
     )
 
-    for epoch in range(epochs):
-        train_loss = train_one_epoch(
-            model, train_loader, loss_fn, optimizer, scaler, device
-        )
-        validation_loss = evaluate(model, validation_loader, loss_fn, device)
-        scheduler.step()
-        log(
-            f"Epoch {epoch + 1:02d}/{epochs} | "
-            f"train loss: {train_loss:.4f} | "
-            f"validation loss: {validation_loss:.4f} | "
-            f"lr: {scheduler.get_last_lr()[0]:.6f}"
-        )
+    epoch = 0
+    while epoch < epochs:
+        try:
+            train_loss = train_one_epoch(
+                model, train_loader, loss_fn, optimizer, scaler, device
+            )
+            validation_loss = evaluate(model, validation_loader, loss_fn, device)
+            scheduler.step()
+            log(
+                f"Epoch {epoch + 1:02d}/{epochs} | "
+                f"train loss: {train_loss:.4f} | "
+                f"validation loss: {validation_loss:.4f} | "
+                f"lr: {scheduler.get_last_lr()[0]:.6f}"
+            )
+        except KeyboardInterrupt:
+            log("Training interrupted; displaying examples.")
+            show_interrupt_visualization(
+                model,
+                train_examples,
+                validation_examples,
+                latent_dims,
+                device,
+            )
+            model.train()
+            continue
+        epoch += 1
 
 
 if __name__ == "__main__":
