@@ -74,7 +74,7 @@ fi
 
 if (( local_mode )); then
     parallel --halt soon,fail=1 --line-buffer --jobs "$parallel_jobs" \
-        'uv run ./resnet18.py --epochs '"$epochs"' --batch-size {1} --learning-rate {2} > "resnet18_b{1}_lr{2}.out" 2> "resnet18_b{1}_lr{2}.err"' \
+        'uv run ./resnet18.py --epochs '"$epochs"' --batch-size {1} --learning-rate {2} --num-workers 1 > "resnet18_b{1}_lr{2}.out" 2> "resnet18_b{1}_lr{2}.err"' \
         ::: "${batch_sizes[@]}" ::: "${learning_rates[@]}"
 else
     parallel --halt soon,fail=1 --line-buffer --jobs "$parallel_jobs" \
@@ -82,6 +82,6 @@ else
         --output=resnet18_b{1}_lr{2}.out \
         --error=resnet18_b{1}_lr{2}.err \
         batch-resnet18.sh \
-        --epochs "$epochs" --batch-size {1} --learning-rate {2} \
+        --epochs "$epochs" --batch-size {1} --learning-rate {2} --num-workers 1 \
         ::: "${batch_sizes[@]}" ::: "${learning_rates[@]}"
 fi

@@ -14,6 +14,7 @@ from torchvision import datasets, models, transforms
 DATA_DIR = "data"
 NUM_CLASSES = 10
 WARMUP_EPOCHS = 5
+DEFAULT_NUM_WORKERS = max(os.cpu_count() or 1, 8)
 START_TIME = time.monotonic()
 
 
@@ -39,7 +40,7 @@ class TransformedDataset(Dataset):
 def build_dataloaders(
     data_dir=DATA_DIR,
     batch_size=128,
-    num_workers=min(os.cpu_count(), 8),
+    num_workers=DEFAULT_NUM_WORKERS,
 ):
     """Download CIFAR-10 and return training, validation, and test loaders."""
     mean = (0.4914, 0.4822, 0.4465)
@@ -231,6 +232,7 @@ def main(
     epochs=50,
     batch_size=256,
     learning_rate=0.2,
+    num_workers=DEFAULT_NUM_WORKERS,
     builtin_resnet18=False,
     compile_model=False,
 ):
@@ -238,6 +240,7 @@ def main(
         "Arguments: "
         f"epochs={epochs}, batch_size={batch_size}, "
         f"learning_rate={learning_rate}, "
+        f"num_workers={num_workers}, "
         f"builtin_resnet18={builtin_resnet18}, "
         f"compile_model={compile_model}"
     )
@@ -245,7 +248,7 @@ def main(
     log(f"Using device: {device}")
 
     train_loader, validation_loader, _test_loader = build_dataloaders(
-        batch_size=batch_size
+        batch_size=batch_size, num_workers=num_workers
     )
     if builtin_resnet18:
         model = models.resnet18(weights=None, num_classes=NUM_CLASSES)
@@ -293,6 +296,10 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=0.2)
     parser.add_argument(
+        "--num-workers", type=int, default=DEFAULT_NUM_WORKERS,
+        help="number of data loader workers",
+    )
+    parser.add_argument(
         "--builtin-resnet18",
         action="store_true",
         help="use torchvision's built-in ResNet-18 instead of the custom model",
@@ -308,6 +315,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        num_workers=args.num_workers,
         builtin_resnet18=args.builtin_resnet18,
         compile_model=args.compile_model,
     )
