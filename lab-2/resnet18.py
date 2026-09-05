@@ -39,7 +39,7 @@ class TransformedDataset(Dataset):
 def build_dataloaders(
     data_dir=DATA_DIR,
     batch_size=128,
-    num_workers=min(os.cpu_count() or 1, 8),
+    num_workers=min(os.cpu_count(), 8),
 ):
     """Download CIFAR-10 and return training, validation, and test loaders."""
     mean = (0.4914, 0.4822, 0.4465)
