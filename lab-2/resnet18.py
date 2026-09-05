@@ -89,6 +89,7 @@ class ResNetBlock(nn.Module):
             kernel_size=3,
             stride=2 if downsample else 1,
             padding=1,
+            bias=False,
         )
         self.conv2 = nn.Conv2d(
             in_channels=out_channels,
@@ -96,6 +97,7 @@ class ResNetBlock(nn.Module):
             kernel_size=3,
             stride=1,
             padding=1,
+            bias=False,
         )
         # Even though the batchnorm is always the same operation, we need multiple copies of it since otherwise autograd
         # will confuse them
@@ -136,22 +138,22 @@ class ResNet18(nn.Module):
         super().__init__()
         # We're working with 32 x 32 images for CIFAR10
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, padding=1, stride=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1, stride=1, bias=False),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
         )
-        self.conv2_1 = ResNetBlock(64)
-        self.conv2_2 = ResNetBlock(64)
-        self.conv3_1 = ResNetBlock(64, downsample=True)
-        self.conv3_2 = ResNetBlock(128)
-        self.conv4_1 = ResNetBlock(128, downsample=True)
-        self.conv4_2 = ResNetBlock(256)
-        self.conv5_1 = ResNetBlock(256, downsample=True)
-        self.conv5_2 = ResNetBlock(512)
+        self.conv2_1 = ResNetBlock(32)
+        self.conv2_2 = ResNetBlock(32)
+        self.conv3_1 = ResNetBlock(32, downsample=True)
+        self.conv3_2 = ResNetBlock(64)
+        self.conv4_1 = ResNetBlock(64, downsample=True)
+        self.conv4_2 = ResNetBlock(128)
+        self.conv5_1 = ResNetBlock(128, downsample=True)
+        self.conv5_2 = ResNetBlock(256)
         self.reduce_classes = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(start_dim=-3), # compress the last three dimensions into one, since the last two are 1x1 anyway
-            nn.Linear(512, num_classes),
+            nn.Linear(256, num_classes),
         )
 
     def forward(self, x):
@@ -259,21 +261,28 @@ def main(
         optimizer, lr_lambda=learning_rate_schedule
     )
 
+    start = time.monotonic()
+    total = 0.0
+
     for epoch in range(epochs):
         train_loss, train_accuracy = train_one_epoch(
             model, train_loader, loss_fn, optimizer, scaler, device
-        )
-        validation_loss, validation_accuracy = evaluate(
-            model, validation_loader, loss_fn, device
         )
         scheduler.step()
         log(
             f"Epoch {epoch + 1:02d}/{epochs} | "
             f"train loss: {train_loss:.4f}, train acc: {train_accuracy:.4f} | "
-            f"validation loss: {validation_loss:.4f}, "
-            f"validation acc: {validation_accuracy:.4f} | "
             f"lr: {scheduler.get_last_lr()[0]:.6f}"
         )
+
+    end = time.monotonic()
+    total = end - start
+    log(f"Training loop completed in {total:.2f} seconds")
+
+    validation_loss, validation_accuracy = evaluate(
+      model, validation_loader, loss_fn, device
+    )
+    log(f"Final validation loss: {validation_loss:.4f}, accuracy: {validation_accuracy:.4f}")
 
 
 if __name__ == "__main__":
