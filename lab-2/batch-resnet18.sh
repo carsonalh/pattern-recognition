@@ -9,8 +9,4 @@
 
 set -eu
 
-if (( $# > 0 )) && [[ "$1" != -* ]]; then
-    exec "$@"
-fi
-
 exec .venv/bin/python resnet18.py "$@"
