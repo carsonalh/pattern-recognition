@@ -1,6 +1,8 @@
 """Train a ResNet-18 classifier on CIFAR-10."""
 
 import argparse
+import math
+import os
 import time
 
 import torch
@@ -11,6 +13,7 @@ from torchvision import datasets, models, transforms
 
 DATA_DIR = "data"
 NUM_CLASSES = 10
+WARMUP_EPOCHS = 5
 START_TIME = time.monotonic()
 
 
@@ -33,7 +36,11 @@ class TransformedDataset(Dataset):
         return self.transform(image), label
 
 
-def build_dataloaders(data_dir=DATA_DIR, batch_size=128, num_workers=2):
+def build_dataloaders(
+    data_dir=DATA_DIR,
+    batch_size=128,
+    num_workers=min(os.cpu_count() or 1, 8),
+):
     """Download CIFAR-10 and return training, validation, and test loaders."""
     mean = (0.4914, 0.4822, 0.4465)
     std = (0.2023, 0.1994, 0.2010)
@@ -71,14 +78,17 @@ def build_dataloaders(data_dir=DATA_DIR, batch_size=128, num_workers=2):
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
     validation_loader = DataLoader(
         validation_dataset, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
+        persistent_workers=num_workers > 0,
     )
     return train_loader, validation_loader, test_loader
 
@@ -140,7 +150,7 @@ class ResNet18(nn.Module):
         super().__init__()
         # We're working with 32 x 32 images for CIFAR10
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, padding=3, stride=2),
+            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, padding=1, stride=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
         )
@@ -179,7 +189,8 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
     correct = 0
     total = 0
     for images, labels in loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
             device_type=device.type, dtype=torch.float16, enabled=amp_enabled
@@ -203,7 +214,8 @@ def evaluate(model, loader, loss_fn, device):
     correct = 0
     total = 0
     for images, labels in loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         with torch.autocast(
             device_type=device.type, dtype=torch.float16, enabled=amp_enabled
         ):
@@ -215,12 +227,19 @@ def evaluate(model, loader, loss_fn, device):
     return total_loss / total, correct / total
 
 
-def main(epochs=50, batch_size=256, learning_rate=0.2, builtin_resnet18=False):
+def main(
+    epochs=50,
+    batch_size=256,
+    learning_rate=0.2,
+    builtin_resnet18=False,
+    compile_model=False,
+):
     log(
         "Arguments: "
         f"epochs={epochs}, batch_size={batch_size}, "
         f"learning_rate={learning_rate}, "
-        f"builtin_resnet18={builtin_resnet18}"
+        f"builtin_resnet18={builtin_resnet18}, "
+        f"compile_model={compile_model}"
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"Using device: {device}")
@@ -233,12 +252,23 @@ def main(epochs=50, batch_size=256, learning_rate=0.2, builtin_resnet18=False):
     else:
         model = ResNet18()
     model = model.to(device)
+    if compile_model:
+        model = torch.compile(model)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
         model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    def learning_rate_schedule(epoch):
+        if epoch < WARMUP_EPOCHS:
+            return (epoch + 1) / WARMUP_EPOCHS
+        cosine_epochs = max(epochs - WARMUP_EPOCHS, 1)
+        progress = min((epoch - WARMUP_EPOCHS) / cosine_epochs, 1.0)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=learning_rate_schedule
+    )
 
     for epoch in range(epochs):
         train_loss, train_accuracy = train_one_epoch(
@@ -252,7 +282,8 @@ def main(epochs=50, batch_size=256, learning_rate=0.2, builtin_resnet18=False):
             f"Epoch {epoch + 1:02d}/{epochs} | "
             f"train loss: {train_loss:.4f}, train acc: {train_accuracy:.4f} | "
             f"validation loss: {validation_loss:.4f}, "
-            f"validation acc: {validation_accuracy:.4f}"
+            f"validation acc: {validation_accuracy:.4f} | "
+            f"lr: {scheduler.get_last_lr()[0]:.6f}"
         )
 
 
@@ -266,10 +297,17 @@ if __name__ == "__main__":
         action="store_true",
         help="use torchvision's built-in ResNet-18 instead of the custom model",
     )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        dest="compile_model",
+        help="compile the model with torch.compile",
+    )
     args = parser.parse_args()
     main(
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         builtin_resnet18=args.builtin_resnet18,
+        compile_model=args.compile_model,
     )
