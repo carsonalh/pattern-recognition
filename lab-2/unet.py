@@ -1,6 +1,7 @@
 """Train a temporary U-Net segmentation model on the PNG slices dataset."""
 
 import argparse
+from contextlib import nullcontext
 import math
 import os
 import signal
@@ -19,8 +20,10 @@ DATA_DIR = Path("data")
 LOCAL_DATA_ARCHIVE = DATA_DIR / "keras_png_slices_data.zip"
 CLUSTER_DATA_DIR = Path("/home/groups/comp3710/OASIS")
 DATA_ROOT = "keras_png_slices_data"
+MODEL_PATH = Path("unet.pth")
 NUM_CLASSES = 4
 WARMUP_EPOCHS = 5
+MAX_GRAD_NORM = 1.0
 DEFAULT_NUM_WORKERS = max(os.cpu_count() or 1, 8)
 START_TIME = time.monotonic()
 
@@ -237,6 +240,27 @@ class Unet(nn.Module):
         return out
 
 
+def autocast_context(device):
+    """Use bfloat16 on CUDA when available; it is safer for large activations."""
+    if device.type != "cuda":
+        return nullcontext()
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
+def amp_dtype(device):
+    """Return the active CUDA autocast dtype, or None when AMP is disabled."""
+    if device.type != "cuda":
+        return None
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
+def require_finite(value, description):
+    """Fail at the operation that first creates a non-finite tensor."""
+    if not torch.isfinite(value).all():
+        raise FloatingPointError(f"Non-finite {description} encountered")
+
+
 @torch.no_grad()
 def dsc(logits, targets, num_classes=NUM_CLASSES, smooth=1e-6):
     """Return mean foreground Dice similarity coefficient for a batch."""
@@ -253,22 +277,32 @@ def dsc(logits, targets, num_classes=NUM_CLASSES, smooth=1e-6):
 
 def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
     model.train()
-    amp_enabled = device.type == "cuda"
     total_loss = 0.0
     total_dsc = 0.0
     total = 0
-    for images, targets in loader:
+    for batch_index, (images, targets) in enumerate(loader):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=amp_enabled
-        ):
+        with autocast_context(device):
             logits = model(images)
+            require_finite(logits, f"logits on training batch {batch_index}")
             loss = loss_fn(logits, targets)
+            require_finite(loss, f"loss on training batch {batch_index}")
         scaler.scale(loss).backward()
+        if scaler.is_enabled():
+            scaler.unscale_(optimizer)
+        gradient_norm = nn.utils.clip_grad_norm_(
+            model.parameters(), MAX_GRAD_NORM, error_if_nonfinite=False
+        )
+        require_finite(gradient_norm, f"gradients on training batch {batch_index}")
         scaler.step(optimizer)
         scaler.update()
+        for parameter in model.parameters():
+            if parameter.requires_grad:
+                require_finite(
+                    parameter, f"parameters after training batch {batch_index}"
+                )
         batch_size = images.size(0)
         total_loss += loss.item() * batch_size
         total_dsc += dsc(logits, targets) * batch_size
@@ -279,18 +313,17 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scaler, device):
 @torch.no_grad()
 def evaluate(model, loader, loss_fn, device):
     model.eval()
-    amp_enabled = device.type == "cuda"
     total_loss = 0.0
     total_dsc = 0.0
     total = 0
-    for images, targets in loader:
+    for batch_index, (images, targets) in enumerate(loader):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
-        with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=amp_enabled
-        ):
+        with autocast_context(device):
             logits = model(images)
+            require_finite(logits, f"logits on validation batch {batch_index}")
             loss = loss_fn(logits, targets)
+            require_finite(loss, f"loss on validation batch {batch_index}")
         batch_size = images.size(0)
         total_loss += loss.item() * batch_size
         total_dsc += dsc(logits, targets) * batch_size
@@ -298,19 +331,32 @@ def evaluate(model, loader, loss_fn, device):
     return total_loss / total, total_dsc / total
 
 
+def save_model(model, model_path=MODEL_PATH):
+    """Save model weights and the metadata needed by the visualization script."""
+    model_to_save = getattr(model, "_orig_mod", model)
+    checkpoint = {
+        "model_state_dict": model_to_save.state_dict(),
+        "num_classes": getattr(model_to_save, "num_classes", NUM_CLASSES),
+    }
+    torch.save(checkpoint, model_path)
+    log(f"Saved model checkpoint to: {model_path}")
+
+
 def main(
     epochs=50,
     batch_size=64,
-    learning_rate=1e-3,
+    learning_rate=3e-4,
     num_workers=DEFAULT_NUM_WORKERS,
     compile_model=False,
+    model_path=MODEL_PATH,
 ):
     log(
         "Arguments: "
         f"epochs={epochs}, batch_size={batch_size}, "
         f"learning_rate={learning_rate}, "
         f"num_workers={num_workers}, "
-        f"compile_model={compile_model}"
+        f"compile_model={compile_model}, "
+        f"model_path={model_path}"
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"Using device: {device}")
@@ -325,7 +371,11 @@ def main(
     if compile_model:
         model = torch.compile(model)
 
-    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+    active_amp_dtype = amp_dtype(device)
+    scaler = torch.amp.GradScaler(
+        "cuda", enabled=active_amp_dtype == torch.float16
+    )
+    log(f"Using autocast dtype: {active_amp_dtype or 'disabled'}")
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -355,13 +405,14 @@ def main(
             f"validation DSC: {validation_dsc:.4f} | "
             f"lr: {scheduler.get_last_lr()[0]:.6f}"
         )
+    save_model(model, model_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument(
         "--num-workers", type=int, default=DEFAULT_NUM_WORKERS,
         help="number of data loader workers",
@@ -372,6 +423,12 @@ if __name__ == "__main__":
         dest="compile_model",
         help="compile the model with torch.compile",
     )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=MODEL_PATH,
+        help="path for the saved model checkpoint",
+    )
     args = parser.parse_args()
     main(
         epochs=args.epochs,
@@ -379,4 +436,5 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         num_workers=args.num_workers,
         compile_model=args.compile_model,
+        model_path=args.model_path,
     )
