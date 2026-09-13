@@ -37,9 +37,15 @@ class Generator(nn.Module):
                 nn.Tanh(),
             )
         elif dataset == GANDataset.OASIS:
-            feature_dims = 32
+            feature_dims = 64
             self.generate = nn.Sequential(
-                nn.ConvTranspose2d(latent_dims, 8 * feature_dims, kernel_size=4, stride=1, bias=False),
+                nn.ConvTranspose2d(latent_dims, 32 * feature_dims, kernel_size=4, stride=1, bias=False),
+                nn.BatchNorm2d(32 * feature_dims),
+                nn.ReLU(),
+                nn.ConvTranspose2d(32 * feature_dims, 16 * feature_dims, kernel_size=4, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(16 * feature_dims),
+                nn.ReLU(),
+                nn.ConvTranspose2d(16 * feature_dims, 8 * feature_dims, kernel_size=4, stride=2, padding=1, bias=False),
                 nn.BatchNorm2d(8 * feature_dims),
                 nn.ReLU(),
                 nn.ConvTranspose2d(8 * feature_dims, 4 * feature_dims, kernel_size=4, stride=2, padding=1, bias=False),
@@ -83,30 +89,33 @@ class Discriminator(nn.Module):
                 # No sigmoid: BCEWithLogitsLoss handles that for us
             )
         elif dataset == GANDataset.OASIS:
-            features = 8
+            features = 16
             self.discriminate = nn.Sequential(
                 nn.Conv2d(1, features, kernel_size=3, padding=1),
                 nn.BatchNorm2d(features),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(features, 2 * features, kernel_size=3, padding=1, stride=2, bias=False),
+                nn.Conv2d(features, 2 * features, kernel_size=4, padding=1, stride=2, bias=False),
                 nn.BatchNorm2d(2 * features),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(2 * features, 4 * features, kernel_size=3, padding=1, stride=2, bias=False),
+                nn.Conv2d(2 * features, 4 * features, kernel_size=4, padding=1, stride=2, bias=False),
                 nn.BatchNorm2d(4 * features),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(4 * features, 8 * features, kernel_size=3, padding=1, stride=2),
+                nn.Conv2d(4 * features, 8 * features, kernel_size=4, padding=1, stride=2, bias=False),
                 nn.BatchNorm2d(8 * features),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(8 * features, 16 * features, kernel_size=3, padding=1, stride=2),
+                nn.Conv2d(8 * features, 16 * features, kernel_size=4, padding=1, stride=2, bias=False),
                 nn.BatchNorm2d(16 * features),
                 nn.LeakyReLU(0.2, inplace=True),
-                # nn.Conv2d(16 * features, 32 * features, kernel_size=3, padding=1, stride=2),
-                # nn.BatchNorm2d(32 * features),
-                # nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(16 * features, 32 * features, kernel_size=4, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(32 * features),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(32 * features, 64 * features, kernel_size=4, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(64 * features),
+                nn.LeakyReLU(0.2, inplace=True),
                 # nn.Conv2d(32 * features, 64 * features, kernel_size=3, padding=1, stride=2),
                 # nn.LeakyReLU(0.2, inplace=True),
                 # nn.Conv2d(64 * features, 1, kernel_size=4),
-                nn.Conv2d(16 * features, 1, kernel_size=4),
+                nn.Conv2d(64 * features, 1, kernel_size=4),
                 nn.Flatten(1),
                 # No sigmoid: BCEWithLogitsLoss handles that for us
             )
@@ -144,7 +153,7 @@ if __name__ == "__main__":
             raise RuntimeError(f"Cannot find OASIS dataset locally, checked: {paths}")
         transform = v2.Compose([
             v2.ToImage(),
-            v2.Resize((64, 64)),
+            # v2.Resize((128, 128)),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize((0.5,), (0.5,))
         ])
@@ -152,8 +161,8 @@ if __name__ == "__main__":
 
     device = "cuda"
     batch_size = 64
-    training_loader = DataLoader(training_data, batch_size=batch_size)
-    latent_dims = 10
+    training_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
+    latent_dims = 64
 
     dataset = GANDataset.MNIST if args.mnist else GANDataset.OASIS
 
@@ -211,7 +220,7 @@ if __name__ == "__main__":
             shown_images = min(sample_images, images.shape[0])
             grid_image = vutils.make_grid(images[:shown_images], nrow=sample_images_side, padding=2)
             plt.imshow(grid_image[0].cpu(), cmap='gray')
-            plt.savefig(f"{prefix}/image_e{epoch+1}", dpi=600)
+            plt.savefig(f"{prefix}/image_e{epoch+1}", dpi=2400)
             plt.close()
 
         print(f"Epoch {epoch+1}/{args.epochs}: dis. loss: {dis_loss_total.cpu().item():.4f}, gen. loss: {gen_loss_total.cpu().item():.4f}")
