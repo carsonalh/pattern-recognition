@@ -123,9 +123,9 @@ else:
     print("FFT was too fast to measure a significant duration difference.")
 # Check if our implementation is close to NumPy's result
 # np.allclose is used for comparing floating - point arrays .
-print(f"\nOur DFT implementation is close to NumPy's FFT:{np.allclose(dft_result, fft_result)}")
+print(f"\nOur DFT implementation is close to NumPy's FFT: {np.allclose(dft_result, fft_result)}")
 print(
-    "Vectorized PyTorch DFT is close to NumPy's FFT:"
+    "Vectorized PyTorch DFT is close to NumPy's FFT: "
     f"{np.allclose(dft_result_pytorch.cpu().numpy(), fft_result)}"
 )
 # 4. Prepare for Plotting
