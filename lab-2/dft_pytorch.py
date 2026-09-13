@@ -17,7 +17,7 @@ N = 2048
 T = 1.0
 f0 = 1
 
-harmonics = [1, 3, 5]
+harmonics = [1, 3, 5, 20, 50]
 
 def square_wave(t):
     return torch.sign(torch.sin(2.0 * torch.pi * f0 * t))
