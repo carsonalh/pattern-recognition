@@ -1,21 +1,18 @@
 """Eigenfaces face-recognition example and shared LFW dataset loader."""
 
 import numpy as np
-from sklearn.datasets import fetch_lfw_people
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-
-
-def load_dataset():
-    """Load the face images and labels used by the lab examples."""
-    return fetch_lfw_people(min_faces_per_person=70, resize=0.4)
+from common import load_lfw_dataset
 
 
 def main():
-    lfw_people = load_dataset()
+    lfw_people = load_lfw_dataset()
 
     n_samples, h, w = lfw_people.images.shape
+    breakpoint()
+
     X = lfw_people.data
     y = lfw_people.target
     target_names = lfw_people.target_names

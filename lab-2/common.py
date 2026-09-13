@@ -4,6 +4,12 @@ import zipfile
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
+from sklearn.datasets import fetch_lfw_people
+
+
+def load_lfw_dataset():
+    """Load the face images and labels used by the lab examples."""
+    return fetch_lfw_people(min_faces_per_person=70, resize=0.4)
 
 
 class ZipImageDataset(Dataset):
