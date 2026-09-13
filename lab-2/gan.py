@@ -6,7 +6,6 @@ from torch.utils.data import DataLoader
 import torchvision
 from torchvision.transforms import v2
 import torchvision.utils as vutils
-import matplotlib.pyplot as plt
 import argparse
 import sys
 from enum import Enum, auto
@@ -218,9 +217,14 @@ if __name__ == "__main__":
             else:
                 prefix = "gan_images/OASIS"
             shown_images = min(sample_images, images.shape[0])
-            grid_image = vutils.make_grid(images[:shown_images], nrow=sample_images_side, padding=2)
-            plt.imshow(grid_image[0].cpu(), cmap='gray')
-            plt.savefig(f"{prefix}/image_e{epoch+1}", dpi=2400)
-            plt.close()
+            grid_image = vutils.make_grid(
+                images[:shown_images],
+                nrow=sample_images_side,
+                padding=2,
+                normalize=True,
+                value_range=(-1, 1),
+            )
+            grid_image = grid_image[:1].mul(255).round().to(device="cpu", dtype=torch.uint8)
+            torchvision.io.write_png(grid_image, f"{prefix}/image_e{epoch+1}.png")
 
         print(f"Epoch {epoch+1}/{args.epochs}: dis. loss: {dis_loss_total.cpu().item():.4f}, gen. loss: {gen_loss_total.cpu().item():.4f}")
