@@ -5,21 +5,20 @@ import math
 import os
 import signal
 import time
-import zipfile
 from pathlib import Path
 
 import torch
-from PIL import Image
 from torch import nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision import transforms
+
+from common import ZipImageDataset
 
 
 DATA_DIR = Path("data")
 LOCAL_DATA_ARCHIVE = DATA_DIR / "keras_png_slices_data.zip"
 CLUSTER_DATA_DIR = Path("/home/groups/comp3710/OASIS")
-DATA_ROOT = "keras_png_slices_data"
 WARMUP_EPOCHS = 5
 DEFAULT_NUM_WORKERS = max(os.cpu_count() or 1, 8)
 START_TIME = time.monotonic()
@@ -45,64 +44,10 @@ def resolve_data_source():
 DATA_SOURCE = resolve_data_source()
 
 
-class ZipImageDataset(Dataset):
-    """Read grayscale images lazily from an archive or extracted data directory."""
-
-    def __init__(self, data_source, split, transform=None):
-        self.data_source = Path(data_source)
-        self.transform = transform or transforms.ToTensor()
-        if self.data_source.is_dir():
-            self.members = sorted((self.data_source / split).glob("*.png"))
-        else:
-            prefix = f"{DATA_ROOT}/{split}/"
-            with zipfile.ZipFile(self.data_source) as archive:
-                self.members = [
-                    name
-                    for name in archive.namelist()
-                    if name.startswith(prefix) and name.endswith(".png")
-                ]
-        self._archive = None
-
-        if not self.members:
-            raise ValueError(f"No PNG images found for split {split!r}")
-
-    def __len__(self):
-        return len(self.members)
-
-    def _get_archive(self):
-        if self._archive is None:
-            self._archive = zipfile.ZipFile(self.data_source)
-        return self._archive
-
-    def __getitem__(self, index):
-        if self.data_source.is_dir():
-            with Image.open(self.members[index]) as image:
-                image = image.convert("L")
-        else:
-            with self._get_archive().open(self.members[index]) as image_file:
-                with Image.open(image_file) as image:
-                    image = image.convert("L")
-        return self.transform(image)
-
-
 def image_shape(data_source=DATA_SOURCE, split="keras_png_slices_train"):
-    """Return the tensor shape of one image without retaining an archive handle."""
-    data_source = Path(data_source)
-    if data_source.is_dir():
-        image_path = next((data_source / split).glob("*.png"))
-        with Image.open(image_path) as image:
-            return (1, image.height, image.width)
-
-    prefix = f"{DATA_ROOT}/{split}/"
-    with zipfile.ZipFile(data_source) as archive:
-        member = next(
-            name
-            for name in archive.namelist()
-            if name.startswith(prefix) and name.endswith(".png")
-        )
-        with archive.open(member) as image_file:
-            with Image.open(image_file) as image:
-                return (1, image.height, image.width)
+    """Return the tensor shape of one image from the shared dataset."""
+    image, _label = ZipImageDataset(data_source, split)[0]
+    return tuple(image.shape)
 
 
 def ignore_sigint(_worker_id):
@@ -142,7 +87,7 @@ def collect_examples(loader, count):
     """Collect a small, CPU-resident set of images for interrupt-time plotting."""
     examples = []
     collected = 0
-    for images in loader:
+    for images, _labels in loader:
         examples.append(images.cpu())
         collected += images.size(0)
         if collected >= count:
@@ -213,7 +158,7 @@ def train_one_epoch(model, loader, optimizer, scaler, device, kl_weight=1e-2):
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
     total = 0
-    for images in loader:
+    for images, _labels in loader:
         images = images.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
@@ -242,7 +187,7 @@ def evaluate(model, loader, loss_fn, device, kl_weight=1e-2):
     amp_enabled = device.type == "cuda"
     total_loss = 0.0
     total = 0
-    for images in loader:
+    for images, _labels in loader:
         images = images.to(device, non_blocking=True)
         with torch.autocast(
             device_type=device.type, dtype=torch.float16, enabled=amp_enabled
