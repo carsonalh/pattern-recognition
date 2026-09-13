@@ -62,6 +62,8 @@ def main():
     ratio_cumsum = np.cumsum(explained_variance / explained_variance.sum())
     plt.plot(np.arange(n_components), ratio_cumsum[:n_components])
     plt.title("Compactness")
+    plt.xlabel("Dimension")
+    plt.ylabel("Total Variance")
     plt.show()
 
     estimator = RandomForestClassifier(
